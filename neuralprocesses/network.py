@@ -92,7 +92,9 @@ def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, n_hidden_units, noise_s
 
     Returns
     -------
-        Output tensors for the parameters of Gaussian distributions for y*
+        Output tensors for the parameters of Gaussian distributions for target outputy, where its mean mu has shape
+        (n_x_samples, n_z_draws)
+        TODO: this assumes/forces dim_y = 1
     """
     # inputs dimensions
     # z_sample has dim [n_draws, dim_z]
