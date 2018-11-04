@@ -19,12 +19,21 @@ def encoder_h(context_xys: tf.Tensor, params: NeuralProcessParams) -> tf.Tensor:
     -------
         Output tensor of encoder network
     """
-    hidden_outputs = tf.layers.dense(context_xys, params.n_hidden_units_h,
-                                     activation=tf.nn.sigmoid,
-                                     name='encoder_layer1',
-                                     reuse=tf.AUTO_REUSE,
-                                     kernel_initializer='normal')
-    r = tf.layers.dense(hidden_outputs, params.dim_r, name="encoder_layer2", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
+    hidden_layer = context_xys
+    # First layers are relu
+    for i, n_hidden_units in enumerate(params.n_hidden_units_h):
+        hidden_layer = tf.layers.dense(hidden_layer, n_hidden_units,
+                                       activation=tf.nn.relu,
+                                       name='encoder_layer_{}'.format(i),
+                                       reuse=tf.AUTO_REUSE,
+                                       kernel_initializer='normal')
+
+    # Last layer is simple linear
+    i = len(params.n_hidden_units_h)
+    r = tf.layers.dense(hidden_layer, params.dim_r,
+                        name='encoder_layer_{}'.format(i),
+                        reuse=tf.AUTO_REUSE,
+                        kernel_initializer='normal')
     return r
 
 
@@ -66,13 +75,15 @@ def get_z_params(context_r: tf.Tensor, params: NeuralProcessParams) -> GaussianP
     """
     mu = tf.layers.dense(context_r, params.dim_z, name="z_params_mu", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
 
-    sigma = tf.layers.dense(context_r, params.dim_z, name="z_params_sigma", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
+    sigma = tf.layers.dense(context_r, params.dim_z, name="z_params_sigma", reuse=tf.AUTO_REUSE,
+                            kernel_initializer='normal')
     sigma = tf.nn.softplus(sigma)
 
     return GaussianParams(mu, sigma)
 
 
-def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, params: NeuralProcessParams, noise_std: float = 0.05) -> GaussianParams:
+def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, params: NeuralProcessParams,
+              noise_std: float = 0.05) -> GaussianParams:
     """Determine output y* by decoding input and latent variable
 
     Creates a fully connected network with a single sigmoid hidden layer and linear output layer.
@@ -113,12 +124,24 @@ def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, params: NeuralProcessPa
     # shape: (n_z_draws, n_xs, dim_x + dim_z)
     inputs = tf.concat([x_star_repeat, z_samples_repeat], axis=2)
 
-    hidden = tf.layers.dense(inputs, params.n_hidden_units_g, activation=tf.nn.sigmoid, name="decoder_layer1",
-                             reuse=tf.AUTO_REUSE, kernel_initializer='normal')
+    hidden_layer = inputs
+    # First layers are relu
+    for i, n_hidden_units in enumerate(params.n_hidden_units_g):
+        hidden_layer = tf.layers.dense(hidden_layer, n_hidden_units,
+                                       activation=tf.nn.relu,
+                                       name='decoder_layer_{}'.format(i),
+                                       reuse=tf.AUTO_REUSE,
+                                       kernel_initializer='normal')
+
+    # Last layer is simple linear
+    i = len(params.n_hidden_units_g)
+    hidden_layer = tf.layers.dense(hidden_layer, 1,
+                                   name='decoder_layer_{}'.format(i),
+                                   reuse=tf.AUTO_REUSE,
+                                   kernel_initializer='normal')
 
     # mu will be of the shape [N_star, n_draws]
-    mu_star = tf.layers.dense(hidden, 1, name="decoder_layer2", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
-    mu_star = tf.squeeze(mu_star, axis=2)
+    mu_star = tf.squeeze(hidden_layer, axis=2)
     mu_star = tf.transpose(mu_star)
 
     sigma_star = tf.constant(noise_std, dtype=tf.float32)
