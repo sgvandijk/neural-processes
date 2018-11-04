@@ -1,9 +1,9 @@
 import tensorflow as tf
 
-from neuralprocesses import GaussianParams
+from neuralprocesses import GaussianParams, NeuralProcessParams
 
 
-def encoder_h(context_xys: tf.Tensor, n_hidden_units: int, dim_r: int) -> tf.Tensor:
+def encoder_h(context_xys: tf.Tensor, params: NeuralProcessParams) -> tf.Tensor:
     """Map context inputs (x_i, y_i) to r_i
 
     Creates a fully connected network with a single sigmoid hidden layer and linear output layer.
@@ -12,21 +12,19 @@ def encoder_h(context_xys: tf.Tensor, n_hidden_units: int, dim_r: int) -> tf.Ten
     ----------
     context_xys
         Input tensor, shape: (n_samples, dim_x + dim_y)
-    n_hidden_units
-        Number of hidden inputs
-    dim_r
-        Number of encoding dimensions
+    params
+        Neural process parameters
 
     Returns
     -------
         Output tensor of encoder network
     """
-    hidden_outputs = tf.layers.dense(context_xys, n_hidden_units,
+    hidden_outputs = tf.layers.dense(context_xys, params.n_hidden_units_h,
                                      activation=tf.nn.sigmoid,
                                      name='encoder_layer1',
                                      reuse=tf.AUTO_REUSE,
                                      kernel_initializer='normal')
-    r = tf.layers.dense(hidden_outputs, dim_r, name="encoder_layer2", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
+    r = tf.layers.dense(hidden_outputs, params.dim_r, name="encoder_layer2", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
     return r
 
 
@@ -50,7 +48,7 @@ def aggregate_r(context_rs: tf.Tensor) -> tf.Tensor:
     return r
 
 
-def get_z_params(context_r: tf.Tensor, dim_z: int) -> GaussianParams:
+def get_z_params(context_r: tf.Tensor, params: NeuralProcessParams) -> GaussianParams:
     """Map encoding to mean and covariance of the random variable Z
 
     Creates a linear dense layer to map encoding to mu_z, and another linear mapping + a softplus activation for Sigma_z
@@ -59,22 +57,22 @@ def get_z_params(context_r: tf.Tensor, dim_z: int) -> GaussianParams:
     ----------
     context_r
         Input encoding tensor, shape: (1, dim_r)
-    dim_z
-        Number of dimensions of Z
+    params
+        Neural process parameters
 
     Returns
     -------
         Output tensors of the mappings for mu_z and Sigma_z
     """
-    mu = tf.layers.dense(context_r, dim_z, name="z_params_mu", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
+    mu = tf.layers.dense(context_r, params.dim_z, name="z_params_mu", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
 
-    sigma = tf.layers.dense(context_r, dim_z, name="z_params_sigma", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
+    sigma = tf.layers.dense(context_r, params.dim_z, name="z_params_sigma", reuse=tf.AUTO_REUSE, kernel_initializer='normal')
     sigma = tf.nn.softplus(sigma)
 
     return GaussianParams(mu, sigma)
 
 
-def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, n_hidden_units, noise_std: float = 0.05) -> GaussianParams:
+def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, params: NeuralProcessParams, noise_std: float = 0.05) -> GaussianParams:
     """Determine output y* by decoding input and latent variable
 
     Creates a fully connected network with a single sigmoid hidden layer and linear output layer.
@@ -85,8 +83,8 @@ def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, n_hidden_units, noise_s
         Random samples from the latent variable distribution, shape: (n_z_draws, dim_z)
     input_xs
         Input values to predict for, shape: (n_x_samples, dim_x)
-    n_hidden_units
-        Number of hidden units used in decoder
+    params
+        Neural process parameters
     noise_std
         Constant standard deviation used on output
 
@@ -115,7 +113,7 @@ def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, n_hidden_units, noise_s
     # shape: (n_z_draws, n_xs, dim_x + dim_z)
     inputs = tf.concat([x_star_repeat, z_samples_repeat], axis=2)
 
-    hidden = tf.layers.dense(inputs, n_hidden_units, activation=tf.nn.sigmoid, name="decoder_layer1",
+    hidden = tf.layers.dense(inputs, params.n_hidden_units_g, activation=tf.nn.sigmoid, name="decoder_layer1",
                              reuse=tf.AUTO_REUSE, kernel_initializer='normal')
 
     # mu will be of the shape [N_star, n_draws]
@@ -128,8 +126,8 @@ def decoder_g(z_samples: tf.Tensor, input_xs: tf.Tensor, n_hidden_units, noise_s
     return GaussianParams(mu_star, sigma_star)
 
 
-def xy_to_z_params(context_xs: tf.Tensor, context_ys: tf.Tensor, n_hidden_units_h: int,
-                   dim_r: int, dim_z: int) -> GaussianParams:
+def xy_to_z_params(context_xs: tf.Tensor, context_ys: tf.Tensor,
+                   params: NeuralProcessParams) -> GaussianParams:
     """Wrapper to create full network from context samples to parameters of pdf of Z
 
     Parameters
@@ -138,19 +136,15 @@ def xy_to_z_params(context_xs: tf.Tensor, context_ys: tf.Tensor, n_hidden_units_
         Tensor with context features, shape: (n_samples, dim_x)
     context_ys
         Tensor with context targets, shape: (n_samples, dim_y)
-    n_hidden_units_h
-        Number of hidden inputs for encoder network
-    dim_r
-        Number of encoding dimensions
-    dim_z
-        Number of dimensions of Z
+    params
+        Neural process parameters
 
     Returns
     -------
         Output tensors of the mappings for mu_z and Sigma_z
     """
     xys = tf.concat([context_xs, context_ys], axis=1)
-    rs = encoder_h(xys, n_hidden_units_h, dim_r)
+    rs = encoder_h(xys, params)
     r = aggregate_r(rs)
-    z_params = get_z_params(r, dim_z)
+    z_params = get_z_params(r, params)
     return z_params
