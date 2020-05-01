@@ -1,18 +1,18 @@
 import tensorflow as tf
+from tensorflow.keras.layers import Input
 
 from neuralprocesses import NeuralProcessParams
 from neuralprocesses.loss import loglikelihood, KLqp_gaussian
 from neuralprocesses.network import xy_to_z_params, decoder_g
 
 
-def init_neural_process(context_xs: tf.Tensor, context_ys: tf.Tensor,
-                        target_xs: tf.Tensor, target_ys: tf.Tensor,
-                        params: NeuralProcessParams,
-                        learning_rate=0.001, n_draws=7):
+def neural_process(
+    params: NeuralProcessParams, learning_rate=0.001, n_draws=7,
+):
     """Set up complete, trainable neural process
 
-    This will set up the full neaural process, including encoder, decoder, loss function and training operator. Any
-    calls to network setup or prediction functions will reuse (parts of) the operations created here.
+    This will set up the full neural process, including encoder,
+    decoder, loss function and training operator.
 
     Parameters
     ----------
@@ -32,21 +32,38 @@ def init_neural_process(context_xs: tf.Tensor, context_ys: tf.Tensor,
         Number of draws of Z per context set, or number of predictions made per target
 
     """
+    context_xs = Input(params.dim_x)
+    context_ys = Input(params.dim_y)
+
+    target_xs = Input(params.dim_x)
+    target_ys = Input(params.dim_y)
+
     # Concatenate context and target
     x_all = tf.concat([context_xs, target_xs], axis=0)
     y_all = tf.concat([context_ys, target_ys], axis=0)
 
     # Map input to z
     z_context = xy_to_z_params(context_xs, context_ys, params)
-    z_all = xy_to_z_params(x_all, y_all, params)
+    z_target = xy_to_z_params(target_xs, target_ys, params)
+
+    # z_all = xy_to_z_params(x_all, y_all, params)
+
+    model = tf.keras.models.Model(
+        inputs=[context_xs, context_ys, target_xs, target_ys],
+        outputs=[z_context, z_target],
+    )
+    return model
 
     # Sample z
-    epsilon = tf.random_normal([n_draws, params.dim_z])
+    epsilon = tf.random.normal([n_draws, params.dim_z])
     z_samples = tf.multiply(epsilon, z_all.sigma)
     z_samples = tf.add(z_samples, z_all.mu)
 
     # Map (z, x*) to y*
     y_pred_params = decoder_g(z_samples, target_xs, params)
+
+    print([context_xs, context_ys, target_xs, target_ys])
+    print(y_pred_params)
 
     # ELBO
     loglike = loglikelihood(target_ys, y_pred_params)
