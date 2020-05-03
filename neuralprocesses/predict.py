@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import tensorflow as tf
@@ -9,7 +9,7 @@ from neuralprocesses.network import decoder_g, xy_to_z_params
 
 @tf.function
 def prior_predict(
-    input_xs: np.array,
+    input_xs: Union[np.array, tf.Tensor],
     decoder: tf.keras.models.Model,
     epsilon: Optional[tf.Tensor] = None,
     n_draws: int = 1,
@@ -43,13 +43,14 @@ def prior_predict(
         epsilon = tf.random.normal([n_draws, params.dim_z])
     z_sample = epsilon
 
-    x_star = tf.reshape(input_xs, [-1, 1, 1])
-    x_star = tf.repeat(x_star, n_draws, axis=1)
+    y_stars = tf.TensorArray(dtype=tf.float32, size=n_draws)
+    for i_z in range(n_draws):
+        y_stars = y_stars.write(
+            i_z,
+            decoder([tf.expand_dims(input_xs, 0), tf.expand_dims(z_sample[i_z], 0)]),
+        )
 
-    y_stars = tf.TensorArray(dtype=tf.float32, size=len(input_xs))
-    for i_x in range(len(input_xs)):
-        y_stars = y_stars.write(i_x, decoder([x_star[i_x], z_sample]))
-    return y_stars.stack()
+    return tf.squeeze(y_stars.stack())
 
 
 def posterior_predict(

@@ -109,16 +109,22 @@ def decoder_g(params: NeuralProcessParams, noise_std: float = 0.05,) -> Gaussian
         TODO: this assumes/forces dim_y = 1
 
     """
-    x_star = Input(params.dim_x)
-    z_sample = Input(params.dim_z)
+    # N samples of size Dx
+    x_star = Input([None, params.dim_x])
+    n_x = tf.shape(x_star)[-2]
 
-    inputs = tf.concat([x_star, z_sample], axis=-1)
+    # Single latent sample of size Dz
+    z_sample = Input(params.dim_z)
+    z_sample_ = tf.expand_dims(z_sample, -2)
+    z_samples = tf.repeat(z_sample_, n_x, axis=-2)
+    inputs = tf.concat([x_star, z_samples], axis=-1)
+
     hidden_layer = inputs
     # First layers are relu
     for i, n_hidden_units in enumerate(params.n_hidden_units_g):
         hidden_layer = Dense(
             n_hidden_units,
-            activation='sigmoid',
+            activation="sigmoid",
             name="decoder_layer_{}".format(i),
             kernel_initializer="normal",
         )(hidden_layer)
@@ -133,7 +139,8 @@ def decoder_g(params: NeuralProcessParams, noise_std: float = 0.05,) -> Gaussian
     return Model([x_star, z_sample], mu_star)
 
 
-def xy_to_z_params(params: NeuralProcessParams) -> GaussianParams:
+@tf.function
+def xy_to_z_params(params: NeuralProcessParams) -> Model:
     """Wrapper to create full graph from context samples to parameters of pdf of Z
 
     Parameters
