@@ -3,62 +3,77 @@ from typing import Tuple
 import tensorflow as tf
 from tensorflow.keras.layers import Layer, Input, Dense
 from tensorflow.keras.models import Sequential, Model
-from neuralprocesses import GaussianParams, NeuralProcessParams
+from neuralprocesses import NeuralProcessParams
 
 
-def encoder_h(params: NeuralProcessParams) -> Model:
-    """Map context inputs (x_i, y_i) to r_i
+class Encoder(tf.keras.Model):
+    def __init__(self, params: NeuralProcessParams):
+        super(Encoder, self).__init__(self)
+        self.params = params
+        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.1)
 
-    Creates a fully connected network with a single sigmoid hidden
-    layer and linear output layer.
+        self.ls = []
+        for i, n_hidden_units in enumerate(self.params.n_hidden_units_h):
+            l = Dense(
+                n_hidden_units,
+                activation="sigmoid",
+                name=f"encoder_layer_{i}",
+                kernel_initializer=initializer,
+            )
+            self.ls.append(l)
 
-    Parameters
-    ----------
-    params
-        Neural process parameters
+        i = len(self.params.n_hidden_units_h)
+        l = Dense(
+            self.params.dim_r,
+            name=f"encoder_layer_{i}",
+            kernel_initializer=initializer,
+            bias_initializer=initializer,
+        )
+        self.ls.append(l)
 
-    Returns
-    -------
-        Output tensor of encoder network
+        # Mu is simple linear
+        self.z_mu = Dense(
+            params.dim_z, name="z_params_mu", kernel_initializer=initializer
+        )
+        # Sigma should be possitive, use soft-plus
+        self.z_sigma = Dense(
+            params.dim_z,
+            activation="softplus",
+            name="z_params_sigma",
+            kernel_initializer=initializer,
+            bias_initializer=initializer,
+        )
 
-    """
-    context_xys = Input(params.dim_x + params.dim_y)
-    x = context_xys
+    def call(self, context_xs, context_ys):
+        context_xys = tf.concat([context_xs, context_ys], axis=-1)
+        n_c = tf.shape(context_xys)[-2]
 
-    # First layers are relu
-    for i, n_hidden_units in enumerate(params.n_hidden_units_h):
-        l = Dense(n_hidden_units, activation=tf.nn.relu, name=f"encoder_layer_{i}")
-        x = l(x)
+        # Fold batch and samples together into superbatch, so that encoder
+        # is the same per sample
+        batch_size = tf.shape(context_xys)[0]
+        context_xys = tf.reshape(
+            context_xys, [batch_size * n_c, self.params.dim_x + self.params.dim_y]
+        )
+        context_xys.set_shape([None, self.params.dim_x + self.params.dim_y])
 
-    # Last layer is simple linear
-    i = len(params.n_hidden_units_h)
-    r = Dense(params.dim_r, name=f"encoder_layer_{i}")
-    Model(context_xys, r)
+        x = context_xys
+        for l in self.ls:
+            x = l(x)
 
+        # Unfold batch and samples
+        rs = tf.reshape(x, [batch_size, n_c, self.params.dim_r])
 
-def aggregate_r(params: NeuralProcessParams) -> Model:
-    """Aggregate the output of the encoder to a single representation
+        # Aggregate encodings
+        aggregate_r = tf.reduce_mean(rs, axis=-2)
 
-    Creates an aggregation (mean) operator to combine the encodings of
-    multiple context inputs
+        # Map to latent distribution parameters
+        mu = self.z_mu(aggregate_r)
+        sigma = self.z_sigma(aggregate_r)
 
-    Parameters
-    ----------
-    context_inputs
-        Input encodings tensor, shape: (n_samples, dim_r)
-
-    Returns
-    -------
-        Output tensor of aggregation result
-
-    """
-    context_xys = Input([None, params.dim_r])
-    mean = tf.reduce_mean(context_rs, axis=0)
-    output = tf.reshape(mean, [1, -1])
-    return Model(context_rs, output)
+        return mu, sigma
 
 
-def get_z_params(params: NeuralProcessParams) -> Model:
+def get_z_params(context_r, params: NeuralProcessParams) -> tf.Tensor:
     """Map encoding to mean and covariance of the random variable Z
 
     Creates a linear dense layer to map encoding to mu_z, and another
@@ -76,71 +91,78 @@ def get_z_params(params: NeuralProcessParams) -> Model:
         Output tensors of the mappings for mu_z and Sigma_z
 
     """
-    context_r = Input(params.dim_r)
     mu = Dense(params.dim_z, name="z_params_mu")(context_r)
 
     sigma = Dense(params.dim_z, name="z_params_sigma")(context_r)
     sigma = tf.nn.softplus(sigma)
 
-    return Model(context_r, [mu, sigma])
+    return [mu, sigma]
 
 
-def decoder_g(params: NeuralProcessParams, noise_std: float = 0.05,) -> GaussianParams:
-    """Determine output y* by decoding input and latent variable
+class Decoder(tf.keras.Model):
+    def __init__(self, params: NeuralProcessParams):
+        super(Decoder, self).__init__(self)
+        self.params = params
 
-    Creates a fully connected network with a single sigmoid hidden
-    layer and linear output layer.
+        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.1)
 
-    Parameters
-    ----------
-    z_samples
-        Random samples from the latent variable distribution, shape: (n_z_draws, dim_z)
-    input_xs
-        Input values to predict for, shape: (n_x_samples, dim_x)
-    params
-        Neural process parameters
-    noise_std
-        Constant standard deviation used on output
+        self.ls = []
+        # First layers are relu
+        for i, n_hidden_units in enumerate(params.n_hidden_units_g):
+            l = Dense(
+                n_hidden_units,
+                activation="sigmoid",
+                name="decoder_layer_{}".format(i),
+                kernel_initializer=initializer,
+                bias_initializer=initializer,
+            )
+            self.ls.append(l)
 
-    Returns
-    -------
-        Output tensors for the parameters of Gaussian distributions for target outputy, where its mean mu has shape
-        (n_x_samples, n_z_draws)
-        TODO: this assumes/forces dim_y = 1
-
-    """
-    # N samples of size Dx
-    x_star = Input([None, params.dim_x])
-    n_x = tf.shape(x_star)[-2]
-
-    # Single latent sample of size Dz
-    z_sample = Input(params.dim_z)
-    z_sample_ = tf.expand_dims(z_sample, -2)
-    z_samples = tf.repeat(z_sample_, n_x, axis=-2)
-    inputs = tf.concat([x_star, z_samples], axis=-1)
-
-    hidden_layer = inputs
-    # First layers are relu
-    for i, n_hidden_units in enumerate(params.n_hidden_units_g):
-        hidden_layer = Dense(
-            n_hidden_units,
-            activation="sigmoid",
+        # Last layer is simple linear
+        i = len(self.params.n_hidden_units_g)
+        l = Dense(
+            self.params.dim_y,
             name="decoder_layer_{}".format(i),
-            kernel_initializer="normal",
-        )(hidden_layer)
+            kernel_initializer=initializer,
+            bias_initializer=initializer,
+        )
+        self.ls.append(l)
 
-    # Last layer is simple linear
-    i = len(params.n_hidden_units_g)
-    mu_star = Dense(1, name="decoder_layer_{}".format(i),)(hidden_layer)
+    def call(self, x_star, z_samples):
+        batch_size = tf.shape(x_star)[0]
 
-    # TODO: TF 2 doesn't like adding a constant to output
-    # sigma_star = tf.constant(noise_std, dtype=tf.float32)
+        n_x = tf.shape(x_star)[-2]  # bs X nx X dim_x
+        n_z = tf.shape(z_samples)[-2]  # bs X nz X dim_z
 
-    return Model([x_star, z_sample], mu_star)
+        x_star = tf.expand_dims(x_star, 1)
+        x_star = tf.repeat(x_star, n_z, axis=1)
+
+        z_samples = tf.expand_dims(z_samples, 2)
+        z_samples = tf.repeat(z_samples, n_x, axis=2)
+
+        inputs = tf.concat([x_star, z_samples], axis=-1)
+
+        # Fold batch and samples together into superbatch, so that decoder
+        # is the same per sample
+        inputs = tf.reshape(
+            inputs, [batch_size * n_z * n_x, self.params.dim_x + self.params.dim_z]
+        )
+        inputs.set_shape([None, self.params.dim_x + self.params.dim_z])
+
+        x = inputs
+        for l in self.ls:
+            x = l(x)
+
+        # Unfold batch and samples
+        mu_star = tf.reshape(x, [batch_size, n_z, n_x, self.params.dim_y])
+
+        # TODO: TF 2 doesn't like adding a constant to output
+        # sigma_star = tf.constant(noise_std, dtype=tf.float32)
+
+        return mu_star
 
 
-@tf.function
-def xy_to_z_params(params: NeuralProcessParams) -> Model:
+def xy_to_z_params(context_xs, context_ys, params: NeuralProcessParams,) -> Model:
     """Wrapper to create full graph from context samples to parameters of pdf of Z
 
     Parameters
@@ -156,11 +178,8 @@ def xy_to_z_params(params: NeuralProcessParams) -> Model:
     -------
         Output tensors of the mappings for mu_z and Sigma_z
     """
-    context_xs = Input(params.dim_x)
-    context_ys = Input(params.dim_y)
-
-    xys = tf.concat([context_xs, context_ys], axis=1)
-    rs = encoder_h(params)(xys)
-    r = aggregate_r(params)(rs)
-    z_params = get_z_params(params)(r)
-    return Model([context_xs, context_ts], z_params)
+    xys = tf.concat([context_xs, context_ys], axis=-1)
+    rs = encoder_h(xys, params)
+    r = aggregate_r(rs, params)
+    z = get_z_params(r, params)
+    return z
