@@ -10,7 +10,7 @@ class Encoder(tf.keras.Model):
     def __init__(self, params: NeuralProcessParams):
         super(Encoder, self).__init__(self)
         self.params = params
-        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.1)
+        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=1.0)
 
         self.ls = []
         for i, n_hidden_units in enumerate(self.params.n_hidden_units_h):
@@ -19,6 +19,7 @@ class Encoder(tf.keras.Model):
                 activation="sigmoid",
                 name=f"encoder_layer_{i}",
                 kernel_initializer=initializer,
+                bias_initializer=initializer,
             )
             self.ls.append(l)
 
@@ -33,7 +34,10 @@ class Encoder(tf.keras.Model):
 
         # Mu is simple linear
         self.z_mu = Dense(
-            params.dim_z, name="z_params_mu", kernel_initializer=initializer
+            params.dim_z,
+            name="z_params_mu",
+            kernel_initializer=initializer,
+            bias_initializer=initializer,
         )
         # Sigma should be possitive, use soft-plus
         self.z_sigma = Dense(
@@ -104,7 +108,7 @@ class Decoder(tf.keras.Model):
         super(Decoder, self).__init__(self)
         self.params = params
 
-        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=0.1)
+        initializer = tf.keras.initializers.RandomNormal(mean=0.0, stddev=1.0)
 
         self.ls = []
         # First layers are relu
