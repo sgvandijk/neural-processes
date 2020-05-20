@@ -1,19 +1,23 @@
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import tensorflow as tf
 
-from neuralprocesses import GaussianParams, NeuralProcessParams
-from neuralprocesses.network import decoder_g, xy_to_z_params
+from neuralprocesses import NeuralProcessParams
 
 
-def prior_predict(input_xs_value: np.array, params: NeuralProcessParams,
-                  epsilon: Optional[tf.Tensor] = None, n_draws: int = 1) -> GaussianParams:
+def prior_predict(
+    input_xs: Union[np.array, tf.Tensor],
+    decoder: tf.keras.models.Model,
+    epsilon: Optional[tf.Tensor] = None,
+    n_draws: int = 1,
+) -> tf.Tensor:
     """Predict output with random network
 
-    This can be seen as a prior over functions, where no training and/or context data is seen yet. The decoder g is
-    randomly initialised, and random samples of Z are drawn from a standard normal distribution, or taken from
-    `epsilon` if provided.
+    This can be seen as a prior over functions, where no training
+    and/or context data is seen yet. The decoder g is randomly
+    initialised, and random samples of Z are drawn from a standard
+    normal distribution, or taken from `epsilon` if provided.
 
     Parameters
     ----------
@@ -30,21 +34,29 @@ def prior_predict(input_xs_value: np.array, params: NeuralProcessParams,
     Returns
     -------
         Output tensors for the parameters of Gaussian distributions for y*
-    """
-    x_star = tf.constant(input_xs_value, dtype=tf.float32)
 
+    """
     # the source of randomness can be optionally passed as an argument
     if epsilon is None:
-        epsilon = tf.random_normal((n_draws, params.dim_z))
+        epsilon = tf.random.normal([n_draws, params.dim_z])
     z_sample = epsilon
 
-    y_star = decoder_g(z_sample, x_star, params)
-    return y_star
+    # Turn into single batch
+    input_xs = tf.expand_dims(input_xs, 0)
+    z_sample = tf.expand_dims(z_sample, 0)
+
+    y_stars = decoder(input_xs, z_sample)
+    return tf.squeeze(y_stars)
 
 
-def posterior_predict(context_xs_value: np.array, context_ys_value: np.array, input_xs_value: np.array,
-                      params: NeuralProcessParams,
-                      epsilon: Optional[tf.Tensor] = None, n_draws: int = 1) -> GaussianParams:
+def posterior_predict(
+    context_xs,
+    context_ys,
+    input_xs,
+    neurproc,
+    epsilon: Optional[tf.Tensor] = None,
+    n_draws: int = 1,
+):
     """Predict posterior function value conditioned on context
 
     Parameters
@@ -66,18 +78,14 @@ def posterior_predict(context_xs_value: np.array, context_ys_value: np.array, in
     -------
         Output tensors for the parameters of Gaussian distributions for y*
     """
-
-    # Inputs for prediction time
-    xs = tf.constant(context_xs_value, dtype=tf.float32)
-    ys = tf.constant(context_ys_value, dtype=tf.float32)
-    x_star = tf.constant(input_xs_value, dtype=tf.float32)
-
-    # For out-of-sample new points
-    z_params = xy_to_z_params(xs, ys, params)
-
-    # the source of randomness can be optionally passed as an argument
     if epsilon is None:
-        epsilon = tf.random_normal((n_draws, params.dim_z))
+        epsilon = tf.random.normal([n_draws, params.dim_z])
+    z_sample = epsilon
+
+    # Turn into single batch
+    input_xs = tf.expand_dims(input_xs, 0)
+    z_sample = tf.expand_dims(z_sample, 0)
+
     z_samples = tf.multiply(epsilon, z_params.sigma)
     z_samples = tf.add(z_samples, z_params.mu)
 
